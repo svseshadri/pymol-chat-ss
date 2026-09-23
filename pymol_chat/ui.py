@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import os
+import threading
 from pathlib import Path
 
 from pymol import cmd
@@ -12,7 +13,14 @@ from pymol.Qt import QtCore, QtGui, QtWidgets
 from .agent import PyMOLAgent
 from .audio import VoiceRecorder, transcribe
 from .config import api_key
-from .keychain import delete_api_key, read_api_key, save_api_key
+from .executor import PyMOLExecutor
+from .keychain import (
+    delete_api_key,
+    read_api_key,
+    save_api_key,
+    storage_description,
+    storage_name,
+)
 from .speech import SpeechPlayer
 
 
@@ -41,6 +49,50 @@ class Task(QtCore.QRunnable):
             self.signals.failed.emit(" — ".join(messages))
 
 
+class _MainThreadCall:
+    def __init__(self, function):
+        self.function = function
+        self.completed = threading.Event()
+        self.result = None
+        self.error = None
+
+
+class MainThreadPyMOLExecutor(QtCore.QObject):
+    # PyMOL API access must run on Qt's GUI thread; the agent itself uses a worker.
+    requested = QtCore.pyqtSignal(object)
+
+    def __init__(self, parent=None, delegate=None):
+        super().__init__(parent)
+        self.delegate = delegate or PyMOLExecutor()
+        self.requested.connect(self._run, QtCore.Qt.QueuedConnection)
+
+    @QtCore.pyqtSlot(object)
+    def _run(self, call):
+        try:
+            call.result = call.function()
+        except Exception as exc:
+            call.error = exc
+        finally:
+            call.completed.set()
+
+    def _invoke(self, function):
+        if QtCore.QThread.currentThread() == self.thread():
+            return function()
+        call = _MainThreadCall(function)
+        self.requested.emit(call)
+        if not call.completed.wait(60):
+            raise TimeoutError("PyMOL did not complete the requested operation within 60 seconds.")
+        if call.error is not None:
+            raise call.error
+        return call.result
+
+    def execute(self, code):
+        return self._invoke(lambda: self.delegate.execute(code))
+
+    def scene_summary(self):
+        return self._invoke(self.delegate.scene_summary)
+
+
 class DropPanel(QtWidgets.QWidget):
     files_dropped = QtCore.pyqtSignal(list)
 
@@ -59,7 +111,7 @@ class DropPanel(QtWidgets.QWidget):
 
 
 class APIKeyDialog(QtWidgets.QDialog):
-    """API key status and replacement dialog backed by macOS Keychain."""
+    """API key status and replacement dialog backed by platform storage."""
 
     def __init__(self, parent=None, has_key=False, source=""):
         super().__init__(parent)
@@ -83,7 +135,7 @@ class APIKeyDialog(QtWidgets.QDialog):
         explanation = QtWidgets.QLabel(
             "For security, an active key is never displayed. Paste a new key below "
             "only when you want to add or replace it. Keys entered here are saved "
-            "in the macOS login Keychain and are not included in PyMOL session files."
+            f"in {storage_description()} and are not included in PyMOL session files."
         )
         explanation.setWordWrap(True)
         layout.addWidget(explanation)
@@ -155,6 +207,7 @@ class PyMOLChatDock(QtWidgets.QDockWidget):
         self.setAllowedAreas(QtCore.Qt.BottomDockWidgetArea | QtCore.Qt.RightDockWidgetArea)
         self.setMinimumHeight(210)
         self.thread_pool = QtCore.QThreadPool.globalInstance()
+        self.pymol_executor = MainThreadPyMOLExecutor(self)
         self.agent = None
         self.busy = False
         self.speech = SpeechPlayer(self)
@@ -313,7 +366,10 @@ class PyMOLChatDock(QtWidgets.QDockWidget):
         if self.agent is None:
             # Agent work runs off the GUI thread; emitting a Qt signal safely
             # queues debug updates back onto the GUI thread.
-            self.agent = PyMOLAgent(debug=self.debug_message.emit)
+            self.agent = PyMOLAgent(
+                executor=self.pymol_executor,
+                debug=self.debug_message.emit,
+            )
         return self.agent
 
     def _offer_key_setup(self):
@@ -332,18 +388,18 @@ class PyMOLChatDock(QtWidgets.QDockWidget):
     def show_key_dialog(self):
         active_key = api_key()
         stored_key = read_api_key()
-        source = "macOS Keychain" if stored_key and stored_key == active_key else "environment configuration"
+        source = storage_name() if stored_key and stored_key == active_key else "environment configuration"
         dialog = APIKeyDialog(self, has_key=bool(active_key), source=source)
         result = dialog.exec_()
         if result == QtWidgets.QDialog.Accepted:
             self.agent = None
             self._update_key_status()
-            self._append_message("PyMOL", "API key saved securely in macOS Keychain.")
+            self._append_message("PyMOL", f"API key saved securely in {storage_name()}.")
             return True
         if result == 2:
             self.agent = None
             self._update_key_status()
-            message = "Keychain key removed."
+            message = f"API key removed from {storage_name()}."
             if api_key():
                 message += " A key from the environment configuration remains active."
             self._append_message("PyMOL", message)

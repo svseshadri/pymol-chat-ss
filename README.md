@@ -1,109 +1,266 @@
 # Chat with PyMOL
 
-Chat with PyMOL adds a compact natural-language assistant directly to the PyMOL interface. It can inspect the active session and perform PyMOL operations from typed or spoken requests while keeping the molecular viewer as the main workspace.
+Chat with PyMOL embeds a natural-language assistant in the PyMOL Qt interface. It can inspect the current molecular scene, fetch public PDB structures, and perform constrained PyMOL operations from typed requests.
+
+This repository supports:
+
+- Linux source installations using conda-forge PyMOL
+- Remote Linux sessions using X11 forwarding or a remote desktop
+- macOS source installations and the packaged macOS launcher
+- API-key storage that persists across restarts
+- A command log showing generated PyMOL code, results, and errors
 
 ![Chat with PyMOL controlling a human hemoglobin structure](docs/images/chat-with-pymol.png)
 
-## Install on macOS
+## Quick start on Linux
 
-The packaged application is the easiest installation method. It supports Apple Silicon and Intel Macs and does not require Terminal commands or Python package installation.
+The recommended installation uses Conda or Miniconda:
 
-1. Install PyMOL and place `PyMOL.app` in your **Applications** folder.
-2. Download `Chat-with-PyMOL-macOS.dmg` from the [latest release](https://github.com/RomeroLab/pymol-chat/releases/latest).
-3. Open the downloaded DMG.
-4. Drag **Chat with PyMOL** onto the **Applications** shortcut.
-5. Open **Chat with PyMOL** from Applications. The launcher will find PyMOL and open the assistant automatically.
-6. Paste an OpenAI API key when prompted. Use the link in that window to create or manage keys.
-7. On the first voice request, allow microphone access for **PyMOL Chat Voice**.
+```bash
+git clone https://github.com/RomeroLab/pymol-chat.git
+cd pymol-chat
+conda env create -f environment.yml
+conda activate pymol-chat
+./run.sh
+```
 
-The API key is stored in the macOS login Keychain. It is never embedded in the application or saved in PyMOL session files. A green dot beside the options menu means a key is active.
+If this checkout already has the environment created, only the last three commands are needed:
 
-> The current macOS installer is Developer ID-signed by Philip Romero and notarized by Apple. Open it normally; macOS may show a standard first-launch confirmation and request microphone access. If you downloaded an older installer, download the current release again.
+```bash
+cd ~/pymol-chat
+conda activate pymol-chat
+./run.sh
+```
 
-For detailed installation help and troubleshooting, see [docs/INSTALL.md](docs/INSTALL.md).
+The launcher finds the active environment's `pymol` executable. To use a specific executable, set `PYMOL_BIN`:
 
-## Use
+```bash
+PYMOL_BIN=/path/to/pymol ./run.sh
+```
 
-Open a structure using PyMOL's normal controls, then type a request and press Return. For example:
+### Remote Linux over SSH
+
+PyMOL is a graphical application. Start a new SSH connection with trusted X11 forwarding from the computer where the window should appear:
+
+```bash
+ssh -Y username@remote-host
+```
+
+Check the forwarded display before launching:
+
+```bash
+echo "$DISPLAY"
+xdpyinfo >/dev/null && echo "X11 forwarding works"
+```
+
+`DISPLAY` should contain a value such as `localhost:10.0`. Then activate the environment and run the plugin:
+
+```bash
+cd ~/pymol-chat
+conda activate pymol-chat
+./run.sh
+```
+
+The local computer needs an X server:
+
+- Linux normally provides one with the desktop session.
+- macOS requires XQuartz to be running before the SSH connection is created.
+- Windows can use MobaXterm, VcXsrv, or WSLg.
+
+X11 forwarding must be requested for every new SSH session. Do not set `DISPLAY` manually. For smoother molecular rendering, a VNC or other remote-desktop session is usually faster than X11 forwarding.
+
+## API key
+
+An OpenAI API key with API billing enabled is required. On first launch, paste the key into the API Key Settings dialog.
+
+Keys saved by the dialog are stored as follows:
+
+| Platform | Storage |
+| --- | --- |
+| macOS | Login Keychain |
+| Linux | `~/.pymol-chat/openai_api_key`, mode `0600` |
+
+The saved key takes priority over `OPENAI_API_KEY` and a local `.env` file. It is never displayed again or stored in PyMOL session files.
+
+Alternative configuration:
+
+```bash
+export OPENAI_API_KEY="your-key-here"
+./run.sh
+```
+
+Or create a private development file:
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` and replace the placeholder. The file is ignored by Git and must never be committed.
+
+## First test
+
+Use this prompt to exercise structure retrieval, selections, representations, coloring, and camera control:
+
+```text
+Fetch PDB 1YY9, display the complex as a cartoon, color EGFR cyan and cetuximab orange, highlight EGFR residues within 4 angstroms of cetuximab as red sticks, and orient the view around the binding interface.
+```
+
+Open **... -> Show Command Log** to inspect generated commands and errors. The log is especially useful when a request changes the scene but returns an incomplete summary.
+
+## Using the assistant
+
+Open a structure with PyMOL's normal controls or ask the assistant to fetch a public PDB entry. Example requests:
 
 - `Show the protein as a cartoon and color each chain differently.`
 - `Select residues within 4 angstroms of the ligand.`
 - `Download 2HHB and show the heme groups as sticks.`
-- `Make a clean publication-style view.`
+- `Make a publication-style view and orient around the active site.`
 
-Click the microphone once to speak. Recording stops automatically after a short pause. The **⋯** menu contains API key settings and an optional command log.
+The assistant can use one constrained local tool that executes PyMOL Python. Requests allow at most three command rounds, including structural queries and repair attempts. Larger tasks may require a follow-up request.
 
-Keys saved through **⋯ → API Key Settings** are stored in macOS Keychain and take priority over `OPENAI_API_KEY` or a development `.env` file, including after restarting PyMOL. Environment configuration is used only when no saved key is readable. The replacement field stays blank for privacy; a green status dot indicates that a key is loaded, not that it has been validated by OpenAI.
+Simple visual changes can use a prepared confirmation immediately after successful execution. Measurements, scientific interpretation, errors, and complex operations receive an additional model review before the final reply.
 
-### Spoken replies
+### Voice features
 
-Replies can be read aloud with **Marin**, an AI-generated OpenAI voice using `gpt-4o-mini-tts`. Reply text is sent to OpenAI for speech generation, with additional API usage charges. Audio streams directly to the speakers without saving a recording, with a 300 ms startup buffer for smoother playback. Turn **⋯ → Spoken Replies** off to mute them. Starting another request or the microphone also stops playback. Your mute preference is remembered. Speech errors leave the written reply available in chat.
+Voice input and spoken replies are primarily supported by the packaged macOS build. Spoken replies use the Marin voice and incur additional API usage. Turn **... -> Spoken Replies** off when Qt audio is unavailable, which is common on remote Linux systems. The written assistant remains fully usable.
 
-The previous release, v1.0.0, remains available on the GitHub releases page.
+## macOS installation
 
-Simple visual changes can now use a prepared confirmation immediately after successful execution, skipping the follow-up model request. This shortcut requires one tool call, a nonempty-selection assertion, supported direct visual commands, and no diagnostic output. Measurements, interpretation, errors, and more complex operations still use the normal review loop. Tool results and the confirmation are retained for the next conversation turn.
+For the packaged application:
 
-Visual inspection is disabled: the chat agent does not capture or send viewport screenshots. It is instructed to use `orient(selection)` for orientation and framing, preserve the camera when reframing is unnecessary, batch related changes, and stop after successful completion rather than refine appearance in repeated rounds. Requests allow at most three command rounds (including structural queries and repairs), followed by a tools-disabled final response describing results and any unfinished work. Longer tasks may need a follow-up request. Active selection markers are cleared after every executed batch; named selections remain available.
+1. Install a Qt-based PyMOL 2.x release in `/Applications/PyMOL.app`.
+2. Download `Chat-with-PyMOL-macOS.dmg` from the upstream project's latest release.
+3. Open the DMG and drag **Chat with PyMOL** into **Applications**.
+4. Launch **Chat with PyMOL**, then enter an API key when prompted.
+5. Allow microphone access if voice input is needed.
 
-Sol uses medium reasoning effort by default. Set `OPENAI_REASONING_EFFORT=low` to try faster responses, with a potential tradeoff in complex-task quality. The command log shows executed commands, results, and errors without timing diagnostics. The direct-confirmation shortcut and streaming Marin playback remain enabled.
+The packaged launcher is Developer ID-signed and notarized. See [docs/INSTALL.md](docs/INSTALL.md) for the complete macOS guide.
 
-## Requirements
-
-- macOS 10.15 or newer
-- A Qt-based PyMOL 2.x installation
-- An OpenAI API key with API billing enabled
-- Internet access for OpenAI requests and optional PDB downloads
-
-The default model is `gpt-5.6-sol`. Set `OPENAI_MODEL` to override it in development installations. Voice requests use `gpt-4o-mini-transcribe` by default.
-
-## Privacy and security
-
-- The application does not upload local structure files or capture/send viewport screenshots.
-- Prompt text, compact scene metadata, generated commands, and command results are sent to OpenAI. Results may include molecular information such as residue identities, coordinates, distances, or sequences queried from a local structure. Do not use confidential structures unless this disclosure is permitted.
-- Voice recordings are sent to OpenAI for transcription; reply text is sent for Marin speech generation when spoken replies are enabled.
-- Temporary recordings and structures downloaded through `cmd.fetch` are stored under `~/.pymol-chat` by default. Older versions may have left viewport captures there.
-- Generated Python is checked before execution to restrict common shell, filesystem, networking, and unsafe PyMOL command paths. These checks are not an operating-system sandbox. Review important changes and save your PyMOL session before destructive requests.
-- Public structure retrieval through `cmd.fetch` is allowed and redirected to the private application directory.
-
-## Development
-
-Clone the repository and launch the development version:
+A source checkout can also be launched with:
 
 ```bash
-chmod +x run.sh
+PYMOL_APP=/Applications/PyMOL.app ./run.sh
+```
+
+## Configuration
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `OPENAI_API_KEY` | API credential fallback | None |
+| `OPENAI_MODEL` | Responses API model | `gpt-5.6-sol` |
+| `OPENAI_TRANSCRIBE_MODEL` | Voice transcription model | `gpt-4o-mini-transcribe` |
+| `OPENAI_REASONING_EFFORT` | Model reasoning effort | `medium` |
+| `PYMOL_CHAT_WORKDIR` | Private captures/downloads directory | `~/.pymol-chat` |
+| `PYMOL_BIN` | Linux/Unix PyMOL executable | First `pymol` on `PATH` |
+| `PYMOL_APP` | macOS application bundle | `/Applications/PyMOL.app` |
+
+Use `OPENAI_REASONING_EFFORT=low` for potentially faster responses at the cost of some performance on complex requests.
+
+## Troubleshooting
+
+### PyMOL was not found on PATH
+
+Activate the environment first:
+
+```bash
+conda activate pymol-chat
 ./run.sh
 ```
 
-Either enter an API key through **⋯ → API Key Settings…**, export `OPENAI_API_KEY`, or copy `.env.example` to `.env` and configure it locally. The `.env` file is ignored by Git.
-
-Run the automated tests with PyMOL's Python:
+Confirm the executable is present:
 
 ```bash
-QT_QPA_PLATFORM=minimal /Applications/PyMOL.app/Contents/bin/python \
-  -m unittest discover -s tests -v
+command -v pymol
 ```
 
-Build the universal macOS application and DMG:
+### Qt could not connect to display
+
+The current shell has no usable graphical display. On a remote machine, disconnect and create a fresh `ssh -Y` session after starting the local X server. Verify with `xdpyinfo` before launching.
+
+### The window has stripes or renders slowly
+
+The startup log may report Mesa `llvmpipe`, which is software rendering over the forwarded display. Use a remote desktop/VNC session for better OpenGL behavior. This is separate from the chat plugin.
+
+### The assistant remains on Working
+
+Current code marshals live PyMOL operations to Qt's main thread to avoid worker-thread lockups. Quit any instance started before updating the code and launch it again. If a new request still stalls, open **... -> Show Command Log** and retain the generated commands before restarting.
+
+### No final summary appears
+
+The scene may still have changed. Open **... -> Show Command Log** and inspect the latest command and result before repeating an operation.
+
+### Audio output does not support Marin playback
+
+Disable **... -> Spoken Replies**. This does not affect text replies or molecular operations.
+
+### API key problems
+
+Open **... -> API Key Settings** to replace the saved key. On Linux, verify private permissions without printing the secret:
+
+```bash
+stat -c '%a %U %n' ~/.pymol-chat/openai_api_key
+```
+
+The expected mode is `600`.
+
+## Development
+
+Create or update the reproducible environment:
+
+```bash
+conda env create -f environment.yml
+conda activate pymol-chat
+```
+
+Run all tests without opening a visible window:
+
+```bash
+QT_QPA_PLATFORM=offscreen python -m unittest discover -s tests -v
+```
+
+No third-party packages beyond the PyMOL environment are listed in `requirements.txt`; the OpenAI client uses Python's standard library.
+
+Build the universal macOS launcher and DMG:
 
 ```bash
 ./build_dmg.sh
 ```
 
-The resulting installer is written to `outputs/Chat-with-PyMOL-macOS.dmg`.
+The artifact is written to `outputs/Chat-with-PyMOL-macOS.dmg`.
 
 ## Project structure
 
-- `pymol_chat/ui.py` — native Qt dock and background task handling
-- `pymol_chat/agent.py` — Responses API tool loop
-- `pymol_chat/executor.py` — live PyMOL execution and safety checks
-- `pymol_chat/audio.py` — one-click voice capture and transcription
-- `pymol_chat/api_client.py` — dependency-free OpenAI HTTPS client
-- `pymol_chat/keychain.py` — macOS Keychain integration
-- `voice_helper/` — native silence-detecting microphone helper
-- `packaging/` — universal macOS launcher sources
-- `build_dmg.sh` — reproducible DMG build script
+| Path | Responsibility |
+| --- | --- |
+| `launch_plugin.py` | Registers and opens the PyMOL plugin |
+| `run.sh` | Cross-platform source launcher |
+| `pymol_chat/ui.py` | Qt dock, background tasks, and main-thread PyMOL bridge |
+| `pymol_chat/agent.py` | Responses API tool loop and conversation state |
+| `pymol_chat/api_client.py` | Dependency-free OpenAI HTTP client |
+| `pymol_chat/executor.py` | Constrained live PyMOL execution |
+| `pymol_chat/config.py` | Environment and application directories |
+| `pymol_chat/keychain.py` | macOS Keychain and Linux private-file credentials |
+| `pymol_chat/audio.py` | Voice capture and transcription |
+| `pymol_chat/speech.py` | Spoken-reply streaming |
+| `tests/` | Unit and Qt integration tests |
+| `packaging/` | macOS launcher metadata and sources |
+| `voice_helper/` | Native macOS microphone helper |
 
-The model receives one local tool: direct PyMOL/Python execution. Failed commands are returned for correction within the three-command-round budget, followed by a tools-disabled final response. Completed execution results are retained in memory if a subsequent network request fails, so the next turn receives that history. This recovery does not persist across quitting PyMOL and does not guarantee that the model will never repeat an action.
+## Privacy and security
+
+- Prompt text, compact scene metadata, generated commands, and command results are sent to OpenAI.
+- Results can include residue identities, sequences, coordinates, distances, and other molecular information queried from a local structure.
+- Local structure files and viewport screenshots are not uploaded by the plugin.
+- Voice recordings are sent to OpenAI for transcription when voice input is used.
+- Reply text is sent for speech generation when spoken replies are enabled.
+- Public structures fetched through PyMOL are stored under `~/.pymol-chat/downloads` by default.
+- Generated Python is checked to block common shell, filesystem, networking, and unsafe PyMOL command paths.
+- These checks reduce risk but are not an operating-system sandbox. Save important PyMOL sessions before destructive requests.
+- Do not use confidential molecular data unless sending the described metadata to OpenAI is permitted.
+
+## Git repository
+
+This directory is a complete Git repository and retains the upstream project history for attribution and future comparison. The Linux compatibility, credential storage, and threading fixes are committed locally. No API keys, downloaded structures, sessions, build artifacts, or `.env` files are tracked.
 
 ## License
 

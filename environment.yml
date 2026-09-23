@@ -1,0 +1,6 @@
+name: pymol-chat
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pymol-open-source
